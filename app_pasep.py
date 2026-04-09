@@ -1,6 +1,6 @@
 """
-ConPrev — Super App de Auditoria do PASEP (Fisco-Federal) - Versão Ouro
-Ofício Executivo: Tabela DRE, Filtro de Dízimas (Zeros Limpos) e Cloud Ready
+ConPrev — Super App de Auditoria do PASEP (Fisco-Federal) - Versão Ouro Definitiva
+Ofício Executivo: Tabela DRE, Assinaturas, Rastreabilidade, Filtro de Dízimas e Cloud Ready
 """
 import streamlit as st
 import pandas as pd
@@ -34,11 +34,10 @@ MESES_MAP = {
 def formatar_moeda(valor, force_deduction_sign=False):
     if valor is None: return "R$ 0,00"
     
-    # BLINDAGEM CONTÁBIL: Extermina lixos de ponto flutuante (ex: -0.000000001)
+    # BLINDAGEM CONTÁBIL: Extermina lixos de ponto flutuante
     valor = round(float(valor), 2)
-    
     if valor == 0.0:
-        return "R$ 0,00" # Garante que zero absoluto nunca terá sinal ou cor
+        return "R$ 0,00"
         
     is_negativo = valor < 0 or (force_deduction_sign and valor > 0)
     abs_val = abs(valor)
@@ -84,6 +83,7 @@ def processar_lote_csvs(arquivos_upload):
         for linha in texto.split('\n'):
             linha_upper = linha.upper()
             
+            # RADAR DE TEMPORALIDADE (Captura automática da Competência)
             if not cliente_data['MesRef']:
                 match_data = re.search(r'\b\d{2}\.(\d{2})\.(\d{4})\b', linha_upper)
                 if match_data:
@@ -154,7 +154,7 @@ def gerar_documento_word_dinamico(template_bytes, dados):
         section = doc.sections[0]
         largura_util = section.page_width - section.left_margin - section.right_margin
         
-        # 1. NÚMERO DO OFÍCIO E DATA
+        # 1. NÚMERO DO OFÍCIO E DATA (Alinhamento Dinâmico)
         p_cabecalho = p_base.insert_paragraph_before()
         p_cabecalho.paragraph_format.space_before = Pt(12)
         p_cabecalho.paragraph_format.space_after = Pt(24)
@@ -169,7 +169,7 @@ def gerar_documento_word_dinamico(template_bytes, dados):
         p_cabecalho.add_run("\t") 
         p_cabecalho.add_run(obter_data_formatada())
         
-        # 2. DESTINATÁRIO BLINDADO (Com UF)
+        # 2. DESTINATÁRIO BLINDADO (Sem espaços fantasmas, com UF)
         p_destinatario = p_base.insert_paragraph_before()
         p_destinatario.paragraph_format.line_spacing = 1.0
         p_destinatario.paragraph_format.space_before = Pt(0)
@@ -214,7 +214,7 @@ def gerar_documento_word_dinamico(template_bytes, dados):
             p_corpo.paragraph_format.line_spacing = 1.5          
             p_corpo.paragraph_format.space_after = Pt(0)         
         
-        # 6. ASSINATURA DUPLA
+        # 6. ASSINATURA DUPLA (Sem linhas, lado a lado)
         p_espaco_ass = p_base.insert_paragraph_before()
         p_espaco_ass.paragraph_format.space_before = Pt(48)
         
@@ -245,7 +245,7 @@ def gerar_documento_word_dinamico(template_bytes, dados):
         p_break = p_base.insert_paragraph_before()
         p_break.add_run().add_break(WD_BREAK.PAGE)
 
-    # --- SUBSTITUIÇÃO DE TAGS E TABELA ---
+    # --- SUBSTITUIÇÃO DE TAGS (Incluso Rastreabilidade caso usadas livres) ---
     tags_simples = {
         "{{ente}}": dados['cliente'],
         "{{competencia}}": dados['mes_ref'],
@@ -267,6 +267,7 @@ def gerar_documento_word_dinamico(template_bytes, dados):
             for c in r.cells:
                 for p in c.paragraphs: substituir_no_bloco(p)
                 
+    # --- INJEÇÃO DA TABELA DRE NA TAG {{TABELA_APURACAO}} ---
     placeholder = "{{TABELA_APURACAO}}"
     for p in doc.paragraphs:
         if placeholder in p.text:
@@ -281,7 +282,7 @@ def gerar_documento_word_dinamico(template_bytes, dados):
             tabela = doc.add_table(rows=0, cols=2)
             tabela.autofit = False
             
-            # --- MOTOR DA TABELA CONTÁBIL (FLUXO DRE) ---
+            # MOTOR DA TABELA CONTÁBIL (FLUXO DRE BIG FOUR)
             def add_row(col1, col2, is_header=False, is_subtotal=False, is_final=False, is_indented=False, force_minus=False, obs=None, bg_color=None, is_risk=False):
                 row = tabela.add_row().cells
                 row[0].width = Cm(12.5) 
@@ -338,11 +339,11 @@ def gerar_documento_word_dinamico(template_bytes, dados):
                 if is_indented:
                     p0.paragraph_format.left_indent = Cm(0.5)
                 
-                # Regra estrita de cor vermelha (Apenas para deduções ou risco real aprovado)
+                # Regra estrita de cor vermelha (Zero nunca fica vermelho)
                 if (force_minus or is_risk) and p1.runs and p1.text != "R$ 0,00":
                     p1.runs[0].font.color.rgb = RGBColor(200, 0, 0)
 
-            # ── FLUXO CONTÍNUO DRE ──
+            # ESTRUTURA FLUXO CONTÍNUO
             add_row("Receitas Correntes e Capital", "Valores (R$)", is_header=True)
             add_row("1.0.00.00.00 - Receitas Correntes", formatar_moeda(dados['receitas_correntes']), is_indented=True)
             if dados['transferencias_capital'] > 0: add_row("2.4.00.00.00 - Transferências de Capital", formatar_moeda(dados['transferencias_capital']), is_indented=True)
@@ -372,12 +373,12 @@ def gerar_documento_word_dinamico(template_bytes, dados):
             add_row("Valor Declarado no MIT", formatar_moeda(dados['valor_mit']), is_indented=True, obs=dados.get('obs_mit'))
             add_row("Valor Apurado (Tópico C)", formatar_moeda(dados['pasep_recolher']), is_indented=True)
             
-            # Cálculo blindado do Risco
+            # Cálculo blindado contra dízimas (Risco Fiscal)
             diferenca_mit_c = round(dados['valor_mit'] - dados['pasep_recolher'], 2)
             risco = diferenca_mit_c != 0.00
             add_row("DIFERENÇA (Risco Fiscal)", formatar_moeda(diferenca_mit_c), is_final=True, is_risk=risco)
             
-            # --- INJEÇÃO DA NOVA LINHA DE AUDITORIA (DENTRO DA TABELA) ---
+            # --- INJEÇÃO DA NOVA LINHA DE AUDITORIA (DENTRO DA TABELA, SEM BORDAS) ---
             if dados.get('resp_apuracao') or dados.get('num_demanda'):
                 row_controle = tabela.add_row().cells
                 cell_controle = row_controle[0]
@@ -515,16 +516,16 @@ with tab_audit:
             obs_mit = st.text_input("Nota Explicativa MIT (Opcional)", placeholder="Ex: Processo de Compensação Nº...", key=f"obs_mit_{cliente_selecionado}")
 
     # Lógica Tributária
-    total_receita = rec_correntes + transf_capital
-    total_convenios = sum(c['valor'] for c in lista_convenios_preenchidos)
-    total_deducoes = rec_intra + total_convenios
-    base_real = total_receita - total_deducoes
-    pasep_devido = base_real * 0.01
+    total_receita = round(rec_correntes + transf_capital, 2)
+    total_convenios = round(sum(c['valor'] for c in lista_convenios_preenchidos), 2)
+    total_deducoes = round(rec_intra + total_convenios, 2)
+    base_real = round(total_receita - total_deducoes, 2)
+    pasep_devido = round(base_real * 0.01, 2)
     
-    total_retido = ret_fpm + ret_fep + ret_cid + ret_itr + ret_ado + ret_cfm
-    pasep_recolher = pasep_devido - total_retido if pasep_devido > total_retido else 0.0
+    total_retido = round(ret_fpm + ret_fep + ret_cid + ret_itr + ret_ado + ret_cfm, 2)
+    pasep_recolher = round(pasep_devido - total_retido, 2) if pasep_devido > total_retido else 0.0
     
-    diferenca_mit_c = valor_mit - pasep_recolher
+    diferenca_mit_c = round(valor_mit - pasep_recolher, 2)
 
     with col_preview:
         st.header("📊 Prévia Fisco-Federal")
